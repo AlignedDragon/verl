@@ -31,7 +31,7 @@ class Gsm8kInteraction(BaseInteraction):
     """A demo interaction for calculating the reward of gsm8k.
 
     - `start_interaction`: start a interaction instance for a trajectory.
-    - `generate_response`: generate the response of the assistant.
+    - `generate_response`: generate the response of the user.
     - `calculate_score`: calculate the score of the interaction.
     - `finalize_interaction`: finalize the interaction instance.
     """
@@ -58,11 +58,14 @@ class Gsm8kInteraction(BaseInteraction):
         content = ""
         for i in range(len(messages) - 1, -1, -1):
             item = messages[i]
-            if item.get("role") == "assistant":
+            if item.get("role") == "user":
                 content = item.get("content")
                 break
 
-        self._instance_dict[instance_id]["response"] = content
+        if content and content.startswith("#### "):
+            self._instance_dict[instance_id]["response"] = content
+        else:
+            self._instance_dict[instance_id]["response"] = "#### " + (content or "")
 
         reward = await self.calculate_score(instance_id)
         if reward == 1.0:
@@ -78,7 +81,7 @@ class Gsm8kInteraction(BaseInteraction):
         return gsm8k.compute_score(
             self._instance_dict[instance_id]["response"],
             self._instance_dict[instance_id]["ground_truth"],
-            method="strict",
+            method="flexible",
             format_score=0.0,
             score=1.0,
         )

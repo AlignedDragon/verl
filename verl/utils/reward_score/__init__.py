@@ -24,7 +24,6 @@ def default_compute_score(
     sandbox_fusion_url=None,
     concurrent_semaphore=None,
     memory_limit_mb=None,
-    **kwargs,
 ):
     """Compute the score for a given solution based on the data source.
 
@@ -45,10 +44,10 @@ def default_compute_score(
         from . import gsm8k
 
         res = gsm8k.compute_score(solution_str, ground_truth)
-    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500"]:
-        from . import math_reward
+    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval"]:
+        from . import math
 
-        res = math_reward.compute_score(solution_str, ground_truth)
+        res = math.compute_score(solution_str, ground_truth)
         # [Optional] Math-Verify Integration
         # For enhanced accuracy, consider utilizing Math-Verify (https://github.com/huggingface/Math-Verify).
         # Note: Math-Verify needs to be manually installed via pip: `pip install math-verify`.
@@ -56,7 +55,7 @@ def default_compute_score(
 
         # from . import math_verify
         # res = math_verify.compute_score(solution_str, ground_truth)
-    elif data_source in ["math_dapo", "math", "math_dapo_reasoning"] or data_source.startswith("aime"):
+    elif data_source == "math_dapo" or data_source.startswith("aime"):
         from . import math_dapo
 
         res = math_dapo.compute_score(solution_str, ground_truth)
@@ -90,6 +89,20 @@ def default_compute_score(
         from . import geo3k
 
         res = geo3k.compute_score(solution_str, ground_truth)
+
+    elif data_source == "text_rotations":
+        from . import geo3k
+
+        res = geo3k.compute_score(solution_str, ground_truth)
+
+    elif data_source == "text_rotations_angle_reward":
+        from . import custom_rotation
+
+        # Assuming the model outputs the rotation angle of the image,
+        # The reward is computed as |predicted_angle - ground_truth_angle|
+        # normalized to 0 -- 1 from 180° -- 0°
+        res = custom_rotation.compute_score(solution_str, ground_truth)
+
     elif data_source in [
         "searchR1_nq",
         "searchR1_triviaqa",

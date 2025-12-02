@@ -17,19 +17,17 @@
 """Pretrain utilities."""
 
 import gc
-import inspect
 import os
 import warnings
-from dataclasses import dataclass
 from typing import Any
 
 import torch
 import torch.nn.functional as F
-from megatron.core import ModelParallelConfig, mpu, parallel_state, tensor_parallel
+from megatron.core import ModelParallelConfig, mpu, tensor_parallel
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig
 from megatron.core.enums import ModelType
-from megatron.core.optimizer import ChainedOptimizer
+from megatron.core.optimizer import ChainedOptimizer, OptimizerConfig
 from megatron.core.transformer import TransformerConfig
 from megatron.core.transformer.module import Float16Module
 from megatron.core.utils import get_attr_wrapped_model
@@ -64,14 +62,12 @@ def get_model(
             "Interleaved schedule not supported for model with both encoder and decoder"
         )
         model = []
-        has_vp_stage = inspect.signature(mpu.is_pipeline_first_stage).parameters.get("vp_stage", None) is not None
         for i in range(mpu.get_virtual_pipeline_model_parallel_world_size()):
             mpu.set_virtual_pipeline_model_parallel_rank(i)
             # Set pre_process and post_process only after virtual rank is set.
-            extra_kwargs = {} if not has_vp_stage else {"ignore_virtual": False, "vp_stage": i}
-            pre_process = mpu.is_pipeline_first_stage(**extra_kwargs)
-            post_process = mpu.is_pipeline_last_stage(**extra_kwargs)
-            this_model = model_provider_func(pre_process=pre_process, post_process=post_process, vp_stage=i)
+            pre_process = mpu.is_pipeline_first_stage()
+            post_process = mpu.is_pipeline_last_stage()
+            this_model = model_provider_func(pre_process=pre_process, post_process=post_process)
             this_model.model_type = model_type
             model.append(this_model)
         mpu.set_virtual_pipeline_model_parallel_rank(0)
@@ -80,7 +76,6 @@ def get_model(
         post_process = mpu.is_pipeline_last_stage()
         add_encoder = True
         add_decoder = True
-        assert model_type != ModelType.encoder_and_decoder, "Model type encoder_and_decoder is not supported"
         if model_type == ModelType.encoder_and_decoder:
             if mpu.get_pipeline_model_parallel_world_size() > 1:
                 assert mpu.get_pipeline_model_parallel_split_rank() is not None, (
@@ -160,144 +155,6 @@ def get_model(
     return model
 
 
-@dataclass
-class McoreModuleWrapperConfig:
-    """Configuration for Mcore module wrapper."""
-
-    is_value_model: bool = False
-    share_embeddings_and_output_weights: bool = False
-    wrap_with_ddp: bool = True
-    use_distributed_optimizer: bool = True
-
-
-def make_megatron_module(
-    wrap_config: McoreModuleWrapperConfig,
-    tf_config: TransformerConfig,
-    hf_config: PretrainedConfig,
-    bridge: Any = None,
-    provider: Any = None,
-    override_model_config: dict[str, Any] = None,
-    override_ddp_config: dict[str, Any] = None,
-    peft_cls: Any = None,
-    peft_config: Any = None,
-):
-    if override_model_config is None:
-        override_model_config = {}
-
-    if bridge is not None:
-        if provider is None:
-            from verl.models.mcore.mbridge import freeze_moe_router, make_value_model
-
-            value_model_hook = make_value_model
-        else:
-            from verl.models.mcore.bridge import freeze_moe_router, make_value_model
-
-            value_model_hook = make_value_model(hf_config.hidden_size, provider.sequence_parallel)
-
-        post_model_creation_callbacks = []
-        if wrap_config.is_value_model:
-            post_model_creation_callbacks.append(value_model_hook)
-        if override_model_config.get("moe_config", {}).get("freeze_moe_router", False):
-            post_model_creation_callbacks.append(freeze_moe_router)
-        if provider is not None:
-            # When using PEFT with Megatron-Bridge, we must apply PEFT transformation
-            # BEFORE wrapping the model in DDP. This is required because:
-            # 1. PEFT freezes base model parameters (requires_grad=False)
-            # 2. DDP must be aware of which parameters are trainable when building gradient buckets
-            # 3. The distributed optimizer must only track trainable (adapter) parameters
-            # See Megatron-Bridge docs: training/peft.md
-
-            # Register PEFT transformation as pre-wrap hook if peft_cls is specified
-            # This must happen BEFORE DDP wrapping to avoid KeyError with frozen parameters
-            if peft_cls is not None:
-                from verl.utils.megatron_peft_utils import load_adapter_checkpoint, print_adapter_info
-
-                def peft_pre_wrap_hook(model):
-                    """Pre-wrap hook that applies PEFT transformation."""
-                    # Apply PEFT transformation - this will freeze base model and add adapters
-                    # The PEFT callable handles both freezing and transformation
-                    transformed_model = peft_cls(model, training=True)
-
-                    # Set parameters to save (adapter-only checkpointing)
-                    peft_cls.set_params_to_save(transformed_model)
-
-                    # Load adapter weights if adapter_path is specified
-                    adapter_path = getattr(peft_config, "adapter_path", None)
-                    if adapter_path is not None and adapter_path:
-                        print(f"Loading adapter weights from: {adapter_path}")
-                        load_adapter_checkpoint(transformed_model, adapter_path)
-
-                    # Print PEFT statistics
-                    if torch.distributed.get_rank() == 0:
-                        print_adapter_info(transformed_model)
-
-                    return transformed_model
-
-                provider.register_pre_wrap_hook(peft_pre_wrap_hook)
-
-            # Register post-creation callbacks (make_value_model, freeze_moe_router) as pre-wrap hooks
-            for callback in post_model_creation_callbacks:
-                provider.register_pre_wrap_hook(callback)
-
-            # Create DDP config if needed
-            ddp_config = None
-            if wrap_config.wrap_with_ddp:
-                from megatron.bridge.training.config import DistributedDataParallelConfig
-
-                ddp_config_dict = {
-                    "use_distributed_optimizer": wrap_config.use_distributed_optimizer,
-                }
-                # Apply any DDP config overrides
-                if override_ddp_config is not None:
-                    ddp_config_dict.update(override_ddp_config)
-
-                ddp_config = DistributedDataParallelConfig(**ddp_config_dict)
-                ddp_config.finalize()
-
-            # Now call provide_distributed_model with all hooks registered
-            # Hooks will be applied automatically before DDP wrapping
-            model = provider.provide_distributed_model(
-                wrap_with_ddp=wrap_config.wrap_with_ddp,
-                ddp_config=ddp_config,
-            )
-
-            # Extract TransformerConfig from the created model
-            tf_config = get_model_config(model[0] if isinstance(model, list) else model)
-        else:
-            model = bridge.get_model(
-                post_model_creation_callbacks=post_model_creation_callbacks,
-                wrap_with_ddp=wrap_config.wrap_with_ddp,
-                fp16=tf_config.fp16,
-                bf16=tf_config.bf16,
-                ddp_config=override_ddp_config,
-            )
-    else:
-
-        def megatron_model_provider(pre_process, post_process, vp_stage=None):
-            from verl.models.mcore import init_mcore_model
-
-            parallel_model = init_mcore_model(
-                tf_config,
-                hf_config,
-                pre_process,
-                post_process,
-                share_embeddings_and_output_weights=wrap_config.share_embeddings_and_output_weights,
-                value=wrap_config.is_value_model,
-                freeze_moe_router=override_model_config.get("moe_config", {}).get("freeze_moe_router", False),
-                vp_stage=vp_stage,
-            )
-            parallel_model.to(get_device_name())
-            return parallel_model
-
-        model = get_model(
-            megatron_model_provider,
-            wrap_with_ddp=wrap_config.wrap_with_ddp,
-            use_distributed_optimizer=wrap_config.use_distributed_optimizer,
-            override_ddp_config=override_ddp_config,
-        )
-    return model, tf_config
-
-
 ALL_MODULE_WRAPPER_CLASSNAMES = (DDP, Float16Module)
 
 
@@ -317,17 +174,6 @@ def unwrap_model(model, module_instances=ALL_MODULE_WRAPPER_CLASSNAMES):
 
 
 def convert_config(hf_config: PretrainedConfig, megatron_config) -> TransformerConfig:
-    """[Deprecated] convert config
-
-    Args:
-        hf_config (PretrainedConfig): _description_
-        megatron_config (_type_): _description_
-
-    Returns:
-        TransformerConfig: _description_
-    """
-
-    warnings.warn("[deprecated] use config converter for more model support", stacklevel=2)
     print(f"megatron config {megatron_config}")
     dt = PrecisionType.to_dtype(megatron_config.params_dtype)
     print(f"pipeline_dtype=megatron_config {dt}")
@@ -370,6 +216,20 @@ def convert_config(hf_config: PretrainedConfig, megatron_config) -> TransformerC
     )
 
     return transformer_config
+
+
+def init_megatron_optim_config(optim_config: dict) -> OptimizerConfig:
+    config = OptimizerConfig(
+        optimizer=optim_config.get("optimizer", "adam"),
+        lr=optim_config.get("lr"),
+        min_lr=optim_config.get("min_lr", None),
+        clip_grad=optim_config.get("clip_grad", 1.0),
+        weight_decay=optim_config.get("weight_decay", 0.01),
+        bf16=True,
+        params_dtype=torch.bfloat16,
+        use_distributed_optimizer=True,
+    )
+    return config
 
 
 def mcore_model_parallel_config(
@@ -552,14 +412,12 @@ def offload_megatron_optimizer(optimizers):
 
     for _opt in _iter_opts(optimizers):
         offload_megatron_copy_params(_opt)
-        ## worker may hold zero parameter when enabling custom pipeline layout
-        if _opt.optimizer is not None:
-            opt_state_dict_values = _opt.optimizer.state.values()
-            for v in opt_state_dict_values:
-                if "exp_avg" in v:
-                    v["exp_avg"] = v["exp_avg"].to("cpu", non_blocking=True)
-                if "exp_avg_sq" in v:
-                    v["exp_avg_sq"] = v["exp_avg_sq"].to("cpu", non_blocking=True)
+        opt_state_dict_values = _opt.optimizer.state.values()
+        for v in opt_state_dict_values:
+            if "exp_avg" in v:
+                v["exp_avg"] = v["exp_avg"].to("cpu", non_blocking=True)
+            if "exp_avg_sq" in v:
+                v["exp_avg_sq"] = v["exp_avg_sq"].to("cpu", non_blocking=True)
         gc.collect()
         get_torch_device().empty_cache()
 
@@ -573,18 +431,12 @@ def load_megatron_optimizer(optimizers):
 
     for _opt in _iter_opts(optimizers):
         load_megatron_copy_params(_opt)
-        ## worker may hold zero parameter when enabling custom pipeline layout
-        if _opt.optimizer is not None:
-            # if we are using HybridDeviceOptimizer, we need to only move gpu optimizer state to gpu
-            if hasattr(_opt.optimizer, "_move_new_state_to_right_device"):
-                _opt.optimizer._move_new_state_to_right_device()
-            else:
-                opt_state_dict_values = _opt.optimizer.state.values()
-                for v in opt_state_dict_values:
-                    if "exp_avg" in v:
-                        v["exp_avg"] = v["exp_avg"].to(get_device_id(), non_blocking=True)
-                    if "exp_avg_sq" in v:
-                        v["exp_avg_sq"] = v["exp_avg_sq"].to(get_device_id(), non_blocking=True)
+        opt_state_dict_values = _opt.optimizer.state.values()
+        for v in opt_state_dict_values:
+            if "exp_avg" in v:
+                v["exp_avg"] = v["exp_avg"].to(get_device_id(), non_blocking=True)
+            if "exp_avg_sq" in v:
+                v["exp_avg_sq"] = v["exp_avg_sq"].to(get_device_id(), non_blocking=True)
         gc.collect()
         get_torch_device().empty_cache()
 
@@ -1006,7 +858,7 @@ def per_tensor_generator(
                     merge_params = [merge_params]
                 converted_names, converted_params = weight_converter.convert_param(name, merge_params)
 
-                yield from zip(converted_names, [param.detach() for param in converted_params], strict=True)
+                yield from zip(converted_names, converted_params, strict=True)
             continue
 
         # tp all gather
@@ -1033,33 +885,21 @@ def per_tensor_generator(
             infer_params = [infer_params]
         converted_names, converted_params = weight_converter.convert_param(cur_name, infer_params)
 
-        yield from zip(converted_names, [param.detach() for param in converted_params], strict=True)
+        yield from zip(converted_names, converted_params, strict=True)
 
 
-def get_transformer_layer_offset(pipeline_rank, vp_stage, config: TransformerConfig):
-    """
+def get_transformer_layer_offset(pipeline_rank, vp_rank, config: TransformerConfig):
+    '''
     Get the index offset of any pipeline stage, given the level of pipelining.
 
-    Make pipeline_rank and vp_stage as two arguments to make it more flexible,
+    Make pp_rank and vpp_rank as two arguments to make it more flexible,
     which is able to fetch layer offset for any pipeline stage.
     The original function only returns the layer offset for current pipeline stage.
 
-    Extension to https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/transformer/transformer_layer.py::get_transformer_layer_offset
-    """
-
-    has_vp_stage = (
-        inspect.signature(parallel_state.is_pipeline_first_stage).parameters.get("vp_stage", None) is not None
-    )
-    extra_kwargs = {} if not has_vp_stage else {"ignore_virtual": False, "vp_stage": vp_stage}
-
+    Extension to https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/transformer/transformer_layer.py::get_transformer_layer_offset"""
+    '''
     if config.pipeline_model_parallel_size > 1:
-        if hasattr(config, "pipeline_model_parallel_layout") and config.pipeline_model_parallel_layout:
-            from megatron.core.transformer.enums import LayerType
-
-            offset = config.pipeline_model_parallel_layout.get_layer_offset(
-                layer_type=LayerType.decoder, vp_stage=vp_stage
-            )
-        elif (
+        if (
             config.num_layers_in_first_pipeline_stage is not None
             or config.num_layers_in_last_pipeline_stage is not None
         ):
@@ -1091,8 +931,8 @@ def get_transformer_layer_offset(pipeline_rank, vp_stage, config: TransformerCon
                 config.num_layers - num_layers_in_first_pipeline_stage - num_layers_in_last_pipeline_stage
             )
 
-            if (vp_size := config.virtual_pipeline_model_parallel_size) is not None:
-                assert vp_stage is not None, "vp_stage must be provided if virtual pipeline model parallel size is set"
+            if mpu.get_virtual_pipeline_model_parallel_world_size() is not None:
+                vp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
 
                 # Calculate number of layers in each virtual model chunk
                 # If the num_layers_in_first_pipeline_stage and
@@ -1121,10 +961,10 @@ def get_transformer_layer_offset(pipeline_rank, vp_stage, config: TransformerCon
 
                 # Calculate the layer offset with interleaved uneven pipeline parallelism
                 if pipeline_rank == 0:
-                    offset = vp_stage * total_virtual_chunks
+                    offset = vp_rank * total_virtual_chunks
                 else:
                     offset = (
-                        vp_stage * total_virtual_chunks
+                        vp_rank * total_virtual_chunks
                         + num_layers_per_virtual_model_chunk_in_first_pipeline_stage
                         + (pipeline_rank - 1)
                         * (num_layers_per_vritual_model_chunk_in_middle_pipeline_stage // middle_pipeline_stages)
@@ -1156,64 +996,22 @@ def get_transformer_layer_offset(pipeline_rank, vp_stage, config: TransformerCon
 
             num_layers_per_pipeline_rank = num_layers // config.pipeline_model_parallel_size
 
-            if (vp_size := config.virtual_pipeline_model_parallel_size) is not None:
-                assert vp_stage is not None, "vp_stage must be provided if virtual pipeline model parallel size is set"
+            if mpu.get_virtual_pipeline_model_parallel_world_size() is not None:
+                vp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
 
                 num_layers_per_virtual_rank = num_layers_per_pipeline_rank // vp_size
                 total_virtual_chunks = num_layers // vp_size
-                offset = vp_stage * total_virtual_chunks + (pipeline_rank * num_layers_per_virtual_rank)
+                offset = vp_rank * total_virtual_chunks + (pipeline_rank * num_layers_per_virtual_rank)
 
                 # Reduce the offset of embedding layer from the total layer number
-                if config.account_for_embedding_in_pipeline_split and not parallel_state.is_pipeline_first_stage(
-                    **extra_kwargs
-                ):
+                if config.account_for_embedding_in_pipeline_split and not mpu.is_pipeline_first_stage():
                     offset -= 1
             else:
                 offset = pipeline_rank * num_layers_per_pipeline_rank
 
                 # Reduce the offset of embedding layer from the total layer number
-                if config.account_for_embedding_in_pipeline_split and not parallel_state.is_pipeline_first_stage(
-                    **extra_kwargs
-                ):
+                if config.account_for_embedding_in_pipeline_split and not mpu.is_pipeline_first_stage():
                     offset -= 1
     else:
         offset = 0
     return offset
-
-
-def register_megatron_training_hooks(model: list[torch.nn.Module], optimizer):
-    from megatron.core.distributed import finalize_model_grads
-    from megatron.core.utils import get_model_config
-
-    try:
-        from megatron.core.distributed.fsdp.mcore_fsdp_adapter import FullyShardedDataParallel as megatron_FSDP
-    except ImportError:
-        megatron_FSDP = DDP
-
-    # register some callbacks for megatron training, following https://github.com/NVIDIA/Megatron-LM/blob/core_v0.15.0rc7/megatron/training/training.py#L2039-L2057
-    for one_model in model:
-        config = get_model_config(one_model)
-        config.grad_scale_func = optimizer.scale_loss
-        config.finalize_model_grads_func = finalize_model_grads
-
-        overlap_param_gather = getattr(optimizer.config, "overlap_param_gather", False)
-        overlap_grad_reduce = getattr(one_model.ddp_config, "overlap_grad_reduce", False)
-        align_grad_reduce = True  # default to True, seldom to be false
-        align_param_gather = getattr(one_model.ddp_config, "align_param_gather", False)
-
-        if isinstance(model[0], megatron_FSDP | DDP) and overlap_grad_reduce:
-            assert config.no_sync_func is None, (
-                "When overlap_grad_reduce is True, config.no_sync_func must be None; "
-                "a custom no_sync_func is not supported when overlapping grad-reduce"
-            )
-            config.no_sync_func = [model_chunk.no_sync for model_chunk in model]
-            if len(model) == 1:
-                config.no_sync_func = config.no_sync_func[0]
-            if align_grad_reduce:
-                config.grad_sync_func = [model_chunk.start_grad_sync for model_chunk in model]
-                if len(model) == 1:
-                    config.grad_sync_func = config.grad_sync_func[0]
-        if overlap_param_gather and align_param_gather:
-            config.param_sync_func = [model_chunk.start_param_sync for model_chunk in model]
-            if len(model) == 1:
-                config.param_sync_func = config.param_sync_func[0]
