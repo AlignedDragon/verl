@@ -32,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--local_dir", default="/workspace/verl/data/geo3k_multiturn_w_tool")
     parser.add_argument("--hdfs_dir", default=None)
     args = parser.parse_args()
-    dataset = datasets.load_from_disk('data/rotations/text_recognition_dataset')
+    dataset = datasets.load_from_disk(os.path.expandvars('$HOME/scratch/verl_data/rotations/text_recognition_dataset'))
     # Split the loaded dataset into train and test if not already split
     if not isinstance(dataset, dict) and not hasattr(dataset, "keys"):
         dataset = dataset.train_test_split(test_size=0.1, seed=42)

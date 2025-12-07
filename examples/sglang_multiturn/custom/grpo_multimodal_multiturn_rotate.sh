@@ -5,15 +5,15 @@ HYDRA_FULL_ERROR=1
 set -x
 ulimit -n 65535
 
-PROJECT_DIR="/iopsstor/scratch/cscs/jsaydali/verl/"
+PROJECT_DIR="/users/msayfiddinov/verl"
 CONFIG_PATH="$PROJECT_DIR/examples/sglang_multiturn/config"
 
 python3 -m verl.trainer.main_ppo \
     --config-path="$CONFIG_PATH" \
     --config-name='geo3k_multiturn_grpo' \
     algorithm.adv_estimator=grpo \
-    data.train_files=/workspace/verl/data/custom_multiturn_w_tool_rotate/train.parquet \
-    data.val_files=/workspace/verl/data/custom_multiturn_w_tool_rotate/test.parquet \
+    data.train_files=$HOME/scratch/verl_data/custom_multiturn_w_tool_rotate/train.parquet \
+    data.val_files=$HOME/scratch/verl_data/custom_multiturn_w_tool_rotate/test.parquet \
     data.train_batch_size=128 \
     data.max_prompt_length=2048 \
     data.max_response_length=2048 \

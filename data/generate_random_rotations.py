@@ -7,7 +7,7 @@ from datasets import Dataset
 import argparse
 
 # Configuration
-FONT_PATH = "arial.ttf"
+FONT_PATH = os.path.expandvars("$HOME/verl/data/arial.ttf")
 IMG_SIZE = 512
 
 # Variations
