@@ -16,17 +16,15 @@
 
 import logging
 import os
-import json
 import threading
 from contextlib import ExitStack
 from enum import Enum
-from math import ceil, floor
-from typing import Any, Callable, Optional, TypeVar
+from typing import Callable, Optional, TypeVar
 from uuid import uuid4
 from io import BytesIO
 
 import ray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageFilter
 from qwen_vl_utils import fetch_image
 
 from verl.utils.rollout_trace import rollout_trace_op
@@ -112,16 +110,16 @@ def init_visual_execution_pool(
     else:
         raise NotImplementedError("Process mode is not implemented yet")
 
-class ImageRotateTool(BaseTool):
-    """A tool for rotating an image by a specified angle.
+class EdgeDetectionTool(BaseTool):
+    """A tool for edge detection on an image.
 
-    This tool provides a rotation functionality for images,
+    This tool provides an edge detection functionality on an image,
     with rate limiting and concurrent execution support through Ray.
 
     Methods:
         get_openai_tool_schema: Return the tool schema in OpenAI format
         create: Create a tool instance for a trajectory
-        execute: Execute the rotation operation
+        execute: Execute edge detection tool
         calc_reward: Calculate the reward with respect to tool state
         release: Release the tool instance
     """
@@ -133,19 +131,14 @@ class ImageRotateTool(BaseTool):
         _tool_schema = OpenAIFunctionToolSchema.model_validate({
             "type": "function",
             "function": {
-                "name": "image_rotate_tool",
+                "name": "edge_detection_tool",
                 "description": (
-                    "Rotate an image by a specified angle."
+                    "Detect edges on an image."
                 ),
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "angle": {
-                            "type": "integer",
-                            "description": "The angle by which to rotate the image, in degrees.",
-                        },
-                    },
-                    "required": ["angle"],
+                    "properties": {},
+                    "required": [],
                 },
             }
         })
@@ -165,10 +158,10 @@ class ImageRotateTool(BaseTool):
             rate_limit=self.rate_limit,
             mode=PoolMode.ThreadMode,
         )
-        logger.info(f"Initialized ImageRotateTool with config: {config}")
+        logger.info(f"Initialized EdgeDetectionTool with config: {config}")
 
     # TODO: remove it afterwards
-    def _save_image_debug_info(self, image, rotated_image, angle, output_path):
+    def _save_image_debug_info(self, image, im_edges, output_path):
         # Generate unique folder name
         instance_id = str(uuid4())[:8]
         instance_path = os.path.join(output_path, f"instance_{instance_id}")
@@ -176,16 +169,7 @@ class ImageRotateTool(BaseTool):
 
         # Save the images
         image.save(os.path.join(instance_path, "original_with_box.jpg"))
-        rotated_image.save(os.path.join(instance_path, "rotated.jpg"))
-
-        # Prepare metadata
-        metadata = {
-            "angle": angle
-        }
-
-        # Save metadata
-        with open(os.path.join(instance_path, "metadata.json"), "w") as f:
-            json.dump(metadata, f, indent=2)
+        im_edges.save(os.path.join(instance_path, "edges.jpg"))
 
         print(f"Saved debug info to {instance_path}")
 
@@ -194,10 +178,10 @@ class ImageRotateTool(BaseTool):
 
     async def create(self, image: str | Image.Image, instance_id: Optional[str] = None, **kwargs) -> str:
         """
-        Creates a new instance for image rotate tool.
+        Creates a new instance for edge detection.
 
         This method initializes a new session for an image, which can then be used
-        for operations like rotating. It fetches the image from various sources
+        for operations like edge detection. It fetches the image from various sources
         and stores it internally.
 
         Args:
@@ -229,31 +213,23 @@ class ImageRotateTool(BaseTool):
         return instance_id
 
     @rollout_trace_op
-    async def execute(self, instance_id: str, parameters: dict[str, Any], **kwargs) -> tuple[dict, float, dict]:
-        angle = parameters.get("angle")
-
-        try:
-            angle = int(angle)
-        except (ValueError, TypeError):
-            error_msg = "Error: angle parameter is missing or not an integer."
-            logger.warning(f"Tool execution failed: {error_msg}")
-            return {"text": error_msg}, -0.05, {"success": False}
+    async def execute(self, instance_id: str, **kwargs) -> tuple[dict, float, dict]:
 
         instance_data = self._instance_dict[instance_id]
         image = instance_data["image"]
-        image_width, image_height = image.size
 
         try:
-            rotated_image = image.rotate(angle, expand=True)
-            # self._save_image_debug_info(image, rotated_image, angle, output_path="/users/jsaydali/scratch/run_outputs/image_outputs")
+            image = image.convert(mode="RGB")
+            im_edges = image.filter(ImageFilter.FIND_EDGES)
+            # self._save_image_debug_info(image, im_edges, output_path="/users/msayfiddinov/scratch/verl_data/image_outputs")
         except Exception as e:
-            logger.error(f"Error processing image rotate: {e}")
-            return {"text": f"Error processing image rotate: {e}"}, -0.05, {"success": False}
+            logger.error(f"Error processing edge detection: {e}")
+            return {"text": f"Error processing edge detection: {e}"}, -0.05, {"success": False}
 
-        response_text = f"Rotated the image by {angle} degrees."
+        response_text = f"Carried out edge detection."
         return (
             {
-                "image": [rotated_image],
+                "image": [im_edges],
                 "text": response_text,
             },
             0.0,

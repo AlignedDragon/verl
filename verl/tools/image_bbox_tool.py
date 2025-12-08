@@ -26,7 +26,6 @@ from uuid import uuid4
 from io import BytesIO
 
 import ray
-import ray.actor
 from PIL import Image, ImageDraw
 from qwen_vl_utils import fetch_image
 
