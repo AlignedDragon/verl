@@ -1,0 +1,13 @@
+tools:
+  - class_name: "verl.tools.edge_detection_tool.EdgeDetectionTool"
+    config:
+      type: native
+    tool_schema:
+      type: "function"
+      function:
+        name: "edge_detection_tool"
+        description: "Detect edges on an image."
+        parameters:
+          type: "object"  
+          properties: {}
+          required: []

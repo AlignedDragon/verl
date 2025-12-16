@@ -33,35 +33,25 @@ export TORCH_HOME=$HOME/scratch/cacheX/torch_cache
 mkdir -p $TORCH_HOME
 export WANDB_DIR=$HOME/scratch/cacheX/wandb
 mkdir -p $WANDB_DIR
-
-echo "==========================="
 echo "HF, WANDB, and TORCH dirs are set"
-echo "==========================="
 
 # installing dependencies
 pip install -q qwen_vl_utils mathruler math-verify weave gql==3.5.3
 pip install -q -e /users/msayfiddinov/shared/users/msayfiddi/verl_utils/decord/python
 export LD_LIBRARY_PATH=/users/msayfiddinov/shared/users/msayfiddi/verl_utils/ffmpeg4/lib:$LD_LIBRARY_PATH
 
-
 # # building datasets
 # python $HOME/verl/data/generate_random_rotations.py --output_dir $HOME/scratch/verl_data/rotations
 # python $HOME/verl/data/generate_random_sizes.py --output_dir $HOME/scratch/verl_data/sizes
 # python3 $HOME/verl/examples/data_preprocess/custom_multiturn_w_tool_agent_rotate.py  --local_dir="$HOME/scratch/verl_data/custom_multiturn_w_tool_rotate"
 
-
 # training
 python3 -c "import transformers; transformers.pipeline(model='Qwen/Qwen2.5-VL-3B-Instruct')"
-
 unset ROCR_VISIBLE_DEVICES
-
 unset SSL_CERT_FILE
+# otherwise it causes the following error: "Please don't set ROCR_VISIBLE_DEVICES when HIP/CUDA_VISIBLE_DEVICES is set."
 
-# otherwise it causes the following error:
-# "Please don't set ROCR_VISIBLE_DEVICES when HIP/CUDA_VISIBLE_DEVICES is set."
-# at `verl/single_controller/base/worker.py`
-
-bash examples/sglang_multiturn/custom/grpo_multimodal_multiturn_rotate.sh
+bash examples/sglang_multiturn/custom/grpo_multiturn_flip.sh
 
 #end  
 echo "==========================="
