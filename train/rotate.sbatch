@@ -40,7 +40,7 @@ pip install -q qwen_vl_utils mathruler math-verify weave gql==3.5.3
 pip install -q -e /users/msayfiddinov/shared/users/msayfiddi/verl_utils/decord/python
 export LD_LIBRARY_PATH=/users/msayfiddinov/shared/users/msayfiddi/verl_utils/ffmpeg4/lib:$LD_LIBRARY_PATH
 
-# # building datasets
+## building datasets
 # python $HOME/verl/data/generate_random_rotations.py --output_dir $HOME/scratch/verl_data/rotations
 # python $HOME/verl/data/generate_random_sizes.py --output_dir $HOME/scratch/verl_data/sizes
 # python3 $HOME/verl/examples/data_preprocess/custom_multiturn_w_tool_agent_rotate.py  --local_dir="$HOME/scratch/verl_data/custom_multiturn_w_tool_rotate"

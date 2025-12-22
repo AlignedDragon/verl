@@ -1,3 +1,9 @@
+'''
+
+$HOME/scratch/verl_data/flips/text_recognition_dataset
+
+'''
+
 import os
 import random
 from tqdm import tqdm
@@ -11,8 +17,7 @@ FONT_PATH = os.path.expandvars("$HOME/verl/data/arial.ttf")
 IMG_SIZE = 512
 
 # Variations
-ROTATION_ANGLES = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240, 255, 270, 285, 300, 315, 330, 345, 360]
-OUT_OF_BOUND_ANGLES = [120, 135, 150, 165, 180, 195, 210, 225, 240] # out-of-bound angles for `Qwen/Qwen2.5-VL-3B-Instruct`
+FLIPS = ["horizontal", "vertical"] # standing for top_bottom, left_right
 
 # Default values
 DEFAULT_POSITION = "center"
@@ -93,36 +98,7 @@ def get_safe_position(font, text, position_type="center"):
         y = (IMG_SIZE - h) // 2
     return (x, y)
 
-def get_safe_rotated_position(font, text, rotation):
-    """Get a safe position for rotated text to ensure it stays within bounds."""
-    # Create a temporary image to calculate rotated text bounds
-    temp_img = Image.new('RGBA', (IMG_SIZE * 2, IMG_SIZE * 2), (255, 255, 255, 0))
-    draw = ImageDraw.Draw(temp_img)
-    
-    # Draw text at center of larger canvas
-    temp_center = (IMG_SIZE, IMG_SIZE)
-    draw.text(temp_center, text, font=font, fill=(0, 0, 0, 255))
-    
-    # Rotate the image
-    rotated = temp_img.rotate(rotation, expand=False, fillcolor=(255, 255, 255, 0))
-    
-    # Get bounding box of the rotated text
-    bbox = rotated.getbbox()
-    if bbox is None:
-        # Fallback to center if no text detected
-        return (IMG_SIZE // 2, IMG_SIZE // 2)
-    
-    # Calculate the actual dimensions of rotated text
-    rotated_w = bbox[2] - bbox[0]
-    rotated_h = bbox[3] - bbox[1]
-    
-    # Calculate safe center position in original image
-    safe_x = max(rotated_w // 2, min(IMG_SIZE - rotated_w // 2, IMG_SIZE // 2))
-    safe_y = max(rotated_h // 2, min(IMG_SIZE - rotated_h // 2, IMG_SIZE // 2))
-    
-    return (safe_x, safe_y)
-
-def create_text_image(text, background_color, text_color, font_size, rotation):
+def create_text_image(text, background_color, text_color, font_size, flip):
     """Create an image with text using specified parameters."""
     # Start with base image
     img = Image.new('RGB', (IMG_SIZE, IMG_SIZE), background_color)
@@ -130,11 +106,7 @@ def create_text_image(text, background_color, text_color, font_size, rotation):
     # Create text layer
     font = ImageFont.truetype(FONT_PATH, font_size)
     
-    # Handle position - use safe rotation positioning if there's rotation
-    if rotation != 0:
-        pos = get_safe_rotated_position(font, text, rotation)
-    else:
-        pos = get_safe_position(font, text, DEFAULT_POSITION)
+    pos = get_safe_position(font, text, DEFAULT_POSITION)
     
     # Create a transparent overlay for text
     txt_img = Image.new('RGBA', (IMG_SIZE, IMG_SIZE), (255, 255, 255, 0))
@@ -145,8 +117,10 @@ def create_text_image(text, background_color, text_color, font_size, rotation):
     draw.text(pos, text, font=font, fill=text_color_with_alpha)
     
     # Apply rotation to text layer if needed
-    if rotation != 0:
-        txt_img = txt_img.rotate(rotation, expand=False, fillcolor=(255, 255, 255, 0))
+    if flip == "horizontal":
+        txt_img = txt_img.transpose(Image.FLIP_LEFT_RIGHT)
+    else:
+        txt_img = txt_img.transpose(Image.FLIP_TOP_BOTTOM)
     
     # Composite text onto image
     img = img.convert('RGBA')
@@ -170,17 +144,14 @@ def save_image_and_text(img, filename, text, output_dir):
     }])
     df = pd.concat([df, new_row], ignore_index=True)
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_dir", type=str, default="data/rotations")
-    parser.add_argument("--oob_ratio", type=float, default=0.9)
+    parser.add_argument("--output_dir", type=str, default="data/flips")
     parser.add_argument("--num_images", type=int, default=10000)
     args = parser.parse_args()
 
     # parse arguments
     output_dir = args.output_dir
-    oob_ratio = args.oob_ratio
     num_images = args.num_images
 
     os.makedirs(output_dir, exist_ok=True)
@@ -195,9 +166,7 @@ if __name__ == "__main__":
         background_color = random.choice(LIGHT_BACKGROUNDS)
         text_color = random.choice(DARK_TEXT_COLORS)
         text = random.choice(MISSPELLED_WORDS)
-        # upsample out-of-bound angles to 90%
-        weights = [oob_ratio / len(OUT_OF_BOUND_ANGLES) if angle in OUT_OF_BOUND_ANGLES else (1 - oob_ratio) / (len(ROTATION_ANGLES) - len(OUT_OF_BOUND_ANGLES)) for angle in ROTATION_ANGLES]
-        rotation = random.choices(ROTATION_ANGLES, weights=weights, k=1)[0]
+        flip = random.choices(FLIPS, k=1)[0]
         font_size = random.randint(24, 48)  # Vary font size between 24 and 48
         
         # Create the image
@@ -206,7 +175,7 @@ if __name__ == "__main__":
             background_color=background_color,
             text_color=text_color,
             font_size=font_size,
-            rotation=rotation
+            flip=flip
         )
         
         # Save with descriptive filename

@@ -29,10 +29,10 @@ from PIL import Image
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dir", default="/workspace/verl/data/geo3k_multiturn_w_tool")
+    parser.add_argument("--local_dir", default="/workspace/verl/data/flip_multiturn_w_tool")
     parser.add_argument("--hdfs_dir", default=None)
     args = parser.parse_args()
-    dataset = datasets.load_from_disk(os.path.expandvars('$HOME/scratch/verl_data/rotations/text_recognition_dataset'))
+    dataset = datasets.load_from_disk(os.path.expandvars('$HOME/scratch/verl_data/flips/text_recognition_dataset'))
     # Split the loaded dataset into train and test if not already split
     if not isinstance(dataset, dict) and not hasattr(dataset, "keys"):
         dataset = dataset.train_test_split(test_size=0.1, seed=42)
@@ -48,7 +48,7 @@ if __name__ == "__main__":
     def make_map_fn(split):
         def process_fn(example, idx):
             problem = example.pop("problem")
-            # prompt = problem + " " + instruction_following
+            prompt = problem + " " + instruction_following
             answer = example.pop("answer")
             images = example.pop("images")
             # read each image in images as PIL
@@ -57,14 +57,14 @@ if __name__ == "__main__":
                 with open(img_path, "rb") as f:
                     pil_images.append(Image.open(f).convert("RGBA"))
             data = {
-                "data_source": "text_rotations_angle_reward",
+                "data_source": "text_flip",
                 "agent_name": "tool_agent",
                 "prompt": [
                     {
                         "role": "system",
                         "content": (
                             "You are given an image with a text in it and you need to read the text. "
-                            "You can use the `image_rotate_tool` tool to rotate the image, if necessary. "
+                            "You can use the `image_flip_tool` tool to flip the image, if necessary. "
                             r"You FIRST think about the reasoning process as an internal monologue and then provide the final answer. "
                             r"The reasoning process MUST BE enclosed within <think> </think> tags. "
                             r"The final answer MUST BE put in \boxed{}."
@@ -85,7 +85,7 @@ if __name__ == "__main__":
                     "question": problem,
                     "need_tools_kwargs": True,
                     "tools_kwargs": {
-                        "image_rotate_tool": {
+                        "image_flip_tool": {
                             "create_kwargs": {"image": pil_images[0]},
                             # "execute_kwargs": {},
                             # "calc_reward_kwargs": {},

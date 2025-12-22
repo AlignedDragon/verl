@@ -103,6 +103,26 @@ def default_compute_score(
         # normalized to 0 -- 1 from 180° -- 0°
         res = custom_rotation.compute_score(solution_str, ground_truth)
 
+    elif data_source == "text_flip":
+        from . import custom_flip
+
+        res = custom_flip.compute_score(solution_str, ground_truth)
+
+    elif data_source == "text_bbox":
+        from . import custom_bbox
+
+        res = custom_bbox.compute_score(solution_str, ground_truth)
+
+    elif data_source == "text_crop":
+        from . import custom_crop
+
+        res = custom_crop.compute_score(solution_str, ground_truth)
+
+    elif data_source == "text_line":
+        from . import custom_line 
+
+        res = custom_line.compute_score(solution_str, ground_truth)
+
     elif data_source in [
         "searchR1_nq",
         "searchR1_triviaqa",

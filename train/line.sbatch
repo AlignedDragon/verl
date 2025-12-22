@@ -41,9 +41,8 @@ pip install -q -e /users/msayfiddinov/shared/users/msayfiddi/verl_utils/decord/p
 export LD_LIBRARY_PATH=/users/msayfiddinov/shared/users/msayfiddi/verl_utils/ffmpeg4/lib:$LD_LIBRARY_PATH
 
 # # building datasets
-# python $HOME/verl/data/generate_random_rotations.py --output_dir $HOME/scratch/verl_data/rotations
-# python $HOME/verl/data/generate_random_sizes.py --output_dir $HOME/scratch/verl_data/sizes
-# python3 $HOME/verl/examples/data_preprocess/custom_multiturn_w_tool_agent_rotate.py  --local_dir="$HOME/scratch/verl_data/custom_multiturn_w_tool_rotate"
+# python $HOME/verl/data/generate_random_lines.py --output_dir $HOME/scratch/verl_data/lines
+# python3 $HOME/verl/examples/data_preprocess/custom_multiturn_w_tool_agent_line.py  --local_dir="$HOME/scratch/verl_data/custom_multiturn_w_tool_line"
 
 # training
 python3 -c "import transformers; transformers.pipeline(model='Qwen/Qwen2.5-VL-3B-Instruct')"

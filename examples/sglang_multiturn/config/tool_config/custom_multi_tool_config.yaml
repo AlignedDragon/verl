@@ -100,3 +100,15 @@ tools:
               type: "integer"
               description: "The angle by which to rotate the image, in degrees."
           required: ["angle"]
+  - class_name: "verl.tools.edge_detection_tool.EdgeDetectionTool"
+    config:
+      type: native
+    tool_schema:
+      type: "function"
+      function:
+        name: "edge_detection_tool"
+        description: "Detect edges on an image."
+        parameters:
+          type: "object"  
+          properties: {}
+          required: []
